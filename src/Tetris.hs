@@ -12,6 +12,10 @@ import Control.Monad (zipWithM_)
 import Data.Maybe (fromJust)
 -- import Paths (getDataFile)
 
+-------------------------
+---- Data structures ----
+-------------------------
+
 -- Source: https://stackoverflow.com/a/20294331
 class (Enum a, Bounded a, Eq a) => Circ a where
     circNext, circPrev :: a -> a
@@ -51,6 +55,12 @@ data Game = Game { board :: Board
                  , gameOver :: Bool
                  } deriving Show
 
+data MoveDirection = MoveLeft | MoveDown | MoveRight
+
+--------------------------
+---- Basic properties ----
+--------------------------
+
 boardWidth, boardHeight :: Int
 boardWidth = 10
 boardHeight = 20
@@ -60,133 +70,7 @@ blockSide = 20
 
 blockSize :: Size
 blockSize = sz (blockSide + 1) (blockSide + 1)
-
--- given shape, create new tetronimo
-shapeToTetronimo :: Shape -> Tetronimo
-shapeToTetronimo s = Tetronimo s origin OrientUp
-
--- c n = current, next; will be randomly generated
--- board has two hidden rows at the top
-newGame :: Tetronimo -> Shape -> Game
-newGame c n = Game (listArray (pt 0 (-2), (pt (boardWidth - 1) (boardHeight - 1)))
-            $ repeat Nothing) c n 0 0 False
-
-data Direction = Clockwise | Counterclockwise
-
-positions :: Tetronimo -> [Point]
-positions t = map (pointAdd $ pos t) $ shapeArrange (shape t) (orientation t)
-
-clearRow :: Int -> Board -> Board
-clearRow r b = array (bounds b) (map f $ assocs b)
-    where f (p@(Point x y), v) = if 0 <= y && y <= r then (p, b ! (pt x (y-1)))
-                                 else (p, v)
-
--- check if a row is filled
-rowFilled :: Int -> Board -> Bool
-rowFilled r b = all (/= Nothing) $ map snd row
-    where row = filter (\(Point _ y, _) -> y == r) $ assocs b
-
-clearRows :: Board -> Board
-clearRows b = foldl (flip clearRow) b $ rowsToClear b
-
-rowsToClear :: Board -> [Int]
-rowsToClear b = filter (flip rowFilled b) rowBounds
-    where rowBounds = [minY..maxY]
-          minY = pointY $ fst $ bounds b
-          maxY = pointY $ snd $ bounds b
-
--- add blocks from tetronimo to the board
-addTetronimo :: Tetronimo -> Board -> Board
-addTetronimo t b = clearRows $ b // map (flip (,) (Just $ shapeColor $ shape t)) (positions t)
-
-origin :: Point -- location where new tetronimoes are created
-origin = Point (boardWidth `div` 2 - 1) (-1)
-
-data MoveDirection = MoveLeft | MoveDown | MoveRight
-
-leftOf, belowOf, rightOf :: Point -> Point
-leftOf (Point x y) = pt (x - 1) y
-belowOf (Point x y) = pt x (y + 1)
-rightOf (Point x y) = pt (x + 1) y
-
--- helper to pick one of the above functions
-directionOf :: MoveDirection -> Point -> Point
-directionOf MoveLeft = leftOf
-directionOf MoveDown = belowOf
-directionOf MoveRight = rightOf
-
-movePiece :: Tetronimo -> MoveDirection -> Board -> Tetronimo
-movePiece t dir b
-    | canMove t dir b = t { pos = directionOf dir $ pos t }
-    | otherwise = t
-
-moveGame :: MoveDirection -> Game -> Game
-moveGame d g = g { current = movePiece (current g) d (board g) }
-
-moveToBottom :: Game -> Game
-moveToBottom g
-    | canMove (current g) MoveDown (board g) = moveToBottom $ moveGame MoveDown g
-    | otherwise = g
-
-bottomOrNew :: Shape -> Game -> Game
-bottomOrNew s g
-    | gameOver g = newGame (shapeToTetronimo $ nextShape g) s
-    | otherwise = moveToBottom g
-
--- check if we can move in a certain direction
--- NOTE: order of checks is very important here because of lazy evaluation:
--- lookups will fail if points are not valid, so validity must be checked first
-canMove :: Tetronimo -> MoveDirection -> Board -> Bool
-canMove t d b = and (map validPoint ps') && all (== Nothing) (map ((!) b) ps')
-    where ps = positions t
-          ps' = map (directionOf d) ps
-
--- check if we can rotate
-canRotate :: Tetronimo -> Board -> Bool
-canRotate t b = and (map validPoint ps) && all (== Nothing) (map ((!) b) ps)
-    where ps = positions t'
-          t' = t { orientation = circNext $ orientation t }
-
--- rotate tetronimo clockwise
-rotate :: Tetronimo -> Board -> Tetronimo
-rotate t b
-    | canRotate t b = t { orientation = circNext $ orientation t }
-    | otherwise = t
-
-rotateGame :: Game -> Game
-rotateGame g = g { current = rotate (current g) (board g) }
-
-validPoint :: Point -> Bool
-validPoint (Point x y) = 0 <= x && (x < boardWidth)
-                       && (-2) <= y && (y < boardHeight)
-
-overBoard :: Board -> Bool
-overBoard = any ((/= Nothing) . snd) . filter (\(Point _ y, _) -> y < 0) . assocs
-
--- using original Nintendo Scoring System, http://tetris.wikia.com/wiki/Scoring
-updateScore :: Game -> Game
-updateScore g = g { score = addPoints + score g }
-    where addPoints = pointList !! (length $ rowsToClear b')
-          pointList = map (*(1 + level g)) [0,40,100,300,1200]
-          -- essentially addTetronimo
-          b' = b // map (flip (,) (Just $ shapeColor $ shape t)) (positions t)
-          b = board g
-          t = current g
-
--- first argument is the next shape in line (becomes nextShape g)
--- TODO: This does not account for being able to move at the bottom
-updateGame :: Shape -> Game -> Game
-updateGame s g
-    | canMove (current g) MoveDown (board g) = g
-    | overBoard b = g { board = b, gameOver = True }
-    | otherwise = g { board = b
-                    , current = shapeToTetronimo $ nextShape g
-                    , nextShape = s
-                    , score = score $ updateScore g
---                    , level = level' -- TODO
-                    }
-    where b = addTetronimo (current g) (board g)
-
+ 
 -- color of tetronimo shapes
 shapeColor :: Shape -> Color
 shapeColor ShapeI = cyan
@@ -228,6 +112,142 @@ shapeArrange ShapeZ OrientRight = [pt 1 (-1), pt 0 0, pt 1 0, pt 0 1]
 shapeArrange ShapeZ OrientDown = map (pointAdd (pt 0 1)) $ shapeArrange ShapeZ OrientUp
 shapeArrange ShapeZ OrientLeft = map (pointAdd (pt (-1) 0)) $ shapeArrange ShapeZ OrientRight
 
+-- positions of blocks in tetronimo
+positions :: Tetronimo -> [Point]
+positions t = map (pointAdd $ pos t) $ shapeArrange (shape t) (orientation t)
+
+-- given shape, create new tetronimo
+shapeToTetronimo :: Shape -> Tetronimo
+shapeToTetronimo s = Tetronimo s origin OrientUp
+
+-- location where new tetronimoes are created
+origin :: Point
+origin = Point (boardWidth `div` 2 - 1) (-1)
+
+-- c n = current, next; will be randomly generated
+-- board has two hidden rows at the top
+newGame :: Tetronimo -> Shape -> Game
+newGame c n = Game (listArray (pt 0 (-2), (pt (boardWidth - 1) (boardHeight - 1)))
+            $ repeat Nothing) c n 0 0 False
+
+-- functions to get adjacent points
+leftOf, belowOf, rightOf :: Point -> Point
+leftOf (Point x y) = pt (x - 1) y
+belowOf (Point x y) = pt x (y + 1)
+rightOf (Point x y) = pt (x + 1) y
+
+-- helper to pick one of the above functions
+directionOf :: MoveDirection -> Point -> Point
+directionOf MoveLeft = leftOf
+directionOf MoveDown = belowOf
+directionOf MoveRight = rightOf
+
+-- check if point is valid
+validPoint :: Point -> Bool
+validPoint (Point x y) = 0 <= x && (x < boardWidth)
+                       && (-2) <= y && (y < boardHeight)
+
+-----------------------
+---- Game updating ----
+-----------------------
+
+clearRow :: Int -> Board -> Board
+clearRow r b = array (bounds b) (map f $ assocs b)
+    where f (p@(Point x y), v) = if 0 <= y && y <= r then (p, b ! (pt x (y-1)))
+                                 else (p, v)
+
+-- check if a row is filled
+rowFilled :: Int -> Board -> Bool
+rowFilled r b = all (/= Nothing) $ map snd row
+    where row = filter (\(Point _ y, _) -> y == r) $ assocs b
+
+clearRows :: Board -> Board
+clearRows b = foldl (flip clearRow) b $ rowsToClear b
+
+rowsToClear :: Board -> [Int]
+rowsToClear b = filter (flip rowFilled b) rowBounds
+    where rowBounds = [minY..maxY]
+          minY = pointY $ fst $ bounds b
+          maxY = pointY $ snd $ bounds b
+
+-- add blocks from tetronimo to the board
+addTetronimo :: Tetronimo -> Board -> Board
+addTetronimo t b = clearRows $ b // map (flip (,) (Just $ shapeColor $ shape t)) (positions t)
+
+movePiece :: Tetronimo -> MoveDirection -> Board -> Tetronimo
+movePiece t dir b
+    | canMove t dir b = t { pos = directionOf dir $ pos t }
+    | otherwise = t
+
+moveGame :: MoveDirection -> Game -> Game
+moveGame d g = g { current = movePiece (current g) d (board g) }
+
+moveToBottom :: Game -> Game
+moveToBottom g
+    | canMove (current g) MoveDown (board g) = moveToBottom $ moveGame MoveDown g
+    | otherwise = g
+
+-- move to bottom or start a new game (when space bar is pressed)
+bottomOrNew :: Shape -> Game -> Game
+bottomOrNew s g
+    | gameOver g = newGame (shapeToTetronimo $ nextShape g) s
+    | otherwise = moveToBottom g
+
+-- check if we can move in a certain direction
+-- NOTE: order of checks is very important here because of lazy evaluation:
+-- lookups will fail if points are not valid, so validity must be checked first
+canMove :: Tetronimo -> MoveDirection -> Board -> Bool
+canMove t d b = and (map validPoint ps') && all (== Nothing) (map ((!) b) ps')
+    where ps = positions t
+          ps' = map (directionOf d) ps
+
+-- check if we can rotate
+canRotate :: Tetronimo -> Board -> Bool
+canRotate t b = and (map validPoint ps) && all (== Nothing) (map ((!) b) ps)
+    where ps = positions t'
+          t' = t { orientation = circNext $ orientation t }
+
+-- rotate tetronimo clockwise
+rotate :: Tetronimo -> Board -> Tetronimo
+rotate t b
+    | canRotate t b = t { orientation = circNext $ orientation t }
+    | otherwise = t
+
+rotateGame :: Game -> Game
+rotateGame g = g { current = rotate (current g) (board g) }
+
+-- using original Nintendo Scoring System, http://tetris.wikia.com/wiki/Scoring
+updateScore :: Game -> Game
+updateScore g = g { score = addPoints + score g }
+    where addPoints = pointList !! (length $ rowsToClear b')
+          pointList = map (*(1 + level g)) [0,40,100,300,1200]
+          -- essentially addTetronimo
+          b' = b // map (flip (,) (Just $ shapeColor $ shape t)) (positions t)
+          b = board g
+          t = current g
+
+-- True if board is game over
+gameOverBoard :: Board -> Bool
+gameOverBoard = any ((/= Nothing) . snd) . filter (\(Point _ y, _) -> y < 0) . assocs
+
+-- first argument is the next shape in line (becomes nextShape g)
+-- TODO: This does not account for being able to move at the bottom
+updateGame :: Shape -> Game -> Game
+updateGame s g
+    | canMove (current g) MoveDown (board g) = g
+    | gameOverBoard b = g { board = b, gameOver = True }
+    | otherwise = g { board = b
+                    , current = shapeToTetronimo $ nextShape g
+                    , nextShape = s
+                    , score = score $ updateScore g
+--                    , level = level' -- TODO
+                    }
+    where b = addTetronimo (current g) (board g)
+
+-----------------
+---- Drawing ----
+-----------------
+
 drawBoard :: Board -> DC a -> Rect -> IO ()
 drawBoard b dc viewArea  = do
     let blocks = map (fmap fromJust) $ filter ((/= Nothing) . snd) $ assocs b
@@ -246,14 +266,14 @@ drawBlock' p c dc _ = drawRect dc (rect p blockSize) [ brushColor := c
                                                      , brushKind := BrushSolid
                                                      ]
 
+drawTetronimo :: Tetronimo -> DC a -> Rect -> IO ()
+drawTetronimo t dc viewArea = sequence_ $ map (\bk -> drawBlock bk c dc viewArea) (positions t)
+    where c = shapeColor $ shape t
+
 drawBlockOutline :: Point -> Color -> DC a -> Rect -> IO ()
 drawBlockOutline (Point x y) c dc _ = drawRect dc (rect botLeft blockSize)
                                     $ [ penColor := c , brushKind := BrushTransparent ]
     where botLeft = pt (blockSide * x) (blockSide * y)
-
-drawTetronimo :: Tetronimo -> DC a -> Rect -> IO ()
-drawTetronimo t dc viewArea = sequence_ $ map (\bk -> drawBlock bk c dc viewArea) (positions t)
-    where c = shapeColor $ shape t
 
 -- draw outline of falling block
 drawOutline :: Game -> DC a -> Rect -> IO ()
@@ -264,6 +284,7 @@ drawOutline g dc viewArea = do
 
 drawGame :: Game -> DC a -> Rect -> IO ()
 drawGame g dc viewArea = do
+    drawGrid dc viewArea
     drawNext (nextShape g) dc viewArea
     drawBoard (board g) dc viewArea
     drawTetronimo (current g) dc viewArea
@@ -316,6 +337,10 @@ drawGrid dc _ = do
     zipWithM_ line' bottom top
     zipWithM_ line' leftSide rightSide
 
+------------
+---- IO ----
+------------
+
 getNewShape :: IO Shape
 getNewShape = getStdRandom random
 
@@ -327,7 +352,7 @@ playGame = do
     let fstTetronimo = (shapeToTetronimo fstShape)
     let game = newGame fstTetronimo sndShape
 
-    f <- frameFixed [ bgcolor := grey, on paint := drawGrid ]
+    f <- frameFixed [ bgcolor := grey ]
     p <- panel f []
     dtLevel <- timer p [ interval := 500 ]
     set f [ layout := minsize (sz (7 * blockSide * boardWidth `div` 4) (blockSide * boardHeight)) $ widget p ]
@@ -368,10 +393,8 @@ playGame = do
 
             (bgame :: Behavior Game) <- stepper game egame
 
-            sink p [ on paint :== drawGame <$> bgame ]
-            reactimate $ repaint p <$ egame
---            reactimate $ repaint f <$ eleveltick
---            reactimate $ getNewShape <$ eleveltick
+            sink f [ on paint :== drawGame <$> bgame ]
+            reactimate $ repaint f <$ egame
 
     network <- compile networkDescription
     actuate network 
